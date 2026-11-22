@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-时之笛 Longshot 修改器 v1（Triforce v3.1.1 / longshot.exe）
+时之笛 Longshot 修改器 v2（Triforce v3.1.1 / longshot.exe）
 ================================================================
 用法：先启动游戏（longshot.exe），进到存档、能自由行动，再双击本程序。
 程序启动后自动连接；点数字框敲数字，点「写入」即生效；改完请在游戏内
@@ -12,9 +12,15 @@
 机制（与 Hookshot 版 v5 相同，Triforce v3.1.1 实机验证通过）：
   变量登记表基址 0x10108AA6CAC8（Triforce 上与 v5 相同，已验证），步长 40 字节，
   魔数 0x84C40718；数值 int32 在表项 +28，写入时同时写 +28 与 +32。
-  卢比 #962 / 坚果 #1019 / 种子 #1020（镜像 #1213）/ 木棒 #1021 /
-  箭矢 #1017 / 炸弹 #1018；容量：坚果袋 #973 / 种子袋 #974 / 木棒袋 #975 /
+  卢比 #962 / 魔力 #963 / 炸弹 #1007 / 坚果 #1019 / 种子 #1020（镜像 #1213）/
+  木棒 #1021 / 箭矢 #1017；容量：坚果袋 #973 / 种子袋 #974 / 木棒袋 #975 /
   钱包上限 #976。种子写入时同步写镜像 #1213。
+  炸弹 #1007 由差分验证：23:14 时 #1007=24，用户扔 1 颗炸弹后
+  23:22 搜 23 仅剩 #1007=23（恰好减 1），确认为炸弹；原 #1018 与
+  #964 均非炸弹。魔力 #1234 由数值定位（搜 18）推断：用户称满 8 格
+  为 24 点、用掉 2 格剩 18 点，搜 18 得 6 条，#1234（+8=8）为最
+  可能的魔力候选；若实测不符，依次试 #1238、#124、#1065。
+  魔力上限：本作满魔力 24 点（8 格，每格 3 点）；「满」默认写 24。
 """
 import ctypes
 import struct
@@ -32,11 +38,12 @@ SCAN_LO = 0x10108A000000
 SCAN_HI = 0x10108AC00000
 NAME_HINTS = ('longshot', 'triforce', 'ocarina', 'zelda', 'oot', 'notrex', 'hook')
 IDX_RUPEE = 962
+IDX_MAGIC = 1234
+IDX_BOMBS = 1007
 IDX_NUTS = 1019
 IDX_SEEDS = 1020
 IDX_STICKS = 1021
 IDX_ARROWS = 1017
-IDX_BOMBS = 1018
 IDX_CAP_NUTS = 973
 IDX_CAP_SEEDS = 974
 IDX_CAP_STICKS = 975
@@ -45,11 +52,12 @@ MIRROR_SEEDS = [1213]
 
 FIELDS = [
     ('rupee',  '卢比',           IDX_RUPEE,  IDX_CAP_WALLET, True),
+    ('magic',  '魔力',           IDX_MAGIC,  None,           True),
+    ('bombs',  '炸弹',           IDX_BOMBS,  None,           True),
     ('nuts',   '德库坚果',       IDX_NUTS,   IDX_CAP_NUTS,   True),
     ('seeds',  '德库种子(弹弓)', IDX_SEEDS,  IDX_CAP_SEEDS, True),
     ('sticks', '德库木棒',       IDX_STICKS, IDX_CAP_STICKS, True),
     ('arrows', '箭矢（未验证）', IDX_ARROWS, None,           False),
-    ('bombs',  '炸弹（未验证）', IDX_BOMBS,  None,           False),
 ]
 
 PROCESS_QUERY_INFORMATION = 0x0400
@@ -274,16 +282,19 @@ def pick_game(name):
 class Trainer(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("时之笛 Longshot 修改器 v1")
-        self.geometry("660x600")
+        self.title("时之笛 Longshot 修改器 v2")
+        self.geometry("760x640")
         self.attributes("-topmost", True)
         self.proc = None
         self.reg = None
         self.entries = {}
         self.cur_labels = {}
+        self.lock_vars = {}
+        self.lock_targets = {}
         self._build()
         self.after(200, lambda: self.connect(None))
         self.after(1000, self._refresh_tick)
+        self.after(500, self._lock_tick)
 
     def _build(self):
         top = tk.Frame(self)
@@ -299,7 +310,7 @@ class Trainer(tk.Tk):
 
         grid = tk.Frame(self)
         grid.pack(fill="x", padx=10, pady=4)
-        headers = ["项目", "当前值", "输入数字", "", ""]
+        headers = ["项目", "当前值", "输入数字", "", "", "锁定"]
         for c, h in enumerate(headers):
             tk.Label(grid, text=h, font=("", 10, "bold")).grid(row=0, column=c, padx=4, pady=2)
         row = 1
@@ -315,6 +326,10 @@ class Trainer(tk.Tk):
                       command=lambda k=key: self.do_write(k)).grid(row=row, column=3, padx=4, pady=4)
             tk.Button(grid, text="满", width=5,
                       command=lambda k=key: self.do_full(k)).grid(row=row, column=4, padx=4, pady=4)
+            var = tk.BooleanVar(value=False)
+            self.lock_vars[key] = var
+            tk.Checkbutton(grid, variable=var,
+                           command=lambda k=key: self.on_lock_toggle(k)).grid(row=row, column=5, padx=4, pady=4)
             row += 1
         # 钱包上限（伪字段）
         tk.Label(grid, text="钱包上限").grid(row=row, column=0, sticky="w", padx=4, pady=4)
@@ -328,12 +343,16 @@ class Trainer(tk.Tk):
                   command=lambda: self.do_write('cap')).grid(row=row, column=3, padx=4, pady=4)
         tk.Button(grid, text="满", width=5,
                   command=lambda: self.do_full('cap')).grid(row=row, column=4, padx=4, pady=4)
+        var = tk.BooleanVar(value=False)
+        self.lock_vars['cap'] = var
+        tk.Checkbutton(grid, variable=var,
+                       command=lambda: self.on_lock_toggle('cap')).grid(row=row, column=5, padx=4, pady=4)
 
         bottom = tk.Frame(self)
         bottom.pack(fill="x", padx=10, pady=10)
         tk.Button(bottom, text="全部应用", width=12, command=self.apply_all).pack(side="left", padx=4)
         tk.Button(bottom, text="一键补满", width=12, command=self.max_all).pack(side="left", padx=4)
-        tk.Label(bottom, text="只改内存，不写存档；改完请在游戏内存一次档。",
+        tk.Label(bottom, text="只改内存，不写存档；改完请在游戏内存一次档。\n勾「锁定」后每 0.5 秒把该项重写回锁定值。",
                  fg="gray").pack(side="left", padx=8)
 
     def set_status(self, msg, color="black"):
@@ -406,6 +425,32 @@ class Trainer(tk.Tk):
                 return self.reg.v1(capidx)
         return None
 
+    def _idx_of(self, key):
+        if key == 'cap':
+            return IDX_CAP_WALLET
+        for k, name, idx, capidx, ok in FIELDS:
+            if k == key:
+                return idx
+        return None
+
+    def _name_of(self, key):
+        if key == 'cap':
+            return '钱包上限'
+        for k, name, idx, capidx, ok in FIELDS:
+            if k == key:
+                return name
+        return key
+
+    def _set_value(self, key, value):
+        idx = self._idx_of(key)
+        if idx is None:
+            return False
+        ok = self.reg.set(idx, value)
+        if idx == IDX_SEEDS:
+            for m in MIRROR_SEEDS:
+                self.reg.set(m, value)
+        return ok
+
     def _refresh_values(self):
         if not self.reg or not self.reg.base:
             return
@@ -420,6 +465,42 @@ class Trainer(tk.Tk):
             pass
         self.after(1000, self._refresh_tick)
 
+    def _lock_tick(self):
+        try:
+            if self.reg and self.reg.base:
+                for key, var in self.lock_vars.items():
+                    if var.get():
+                        target = self.lock_targets.get(key)
+                        if target is not None:
+                            self._set_value(key, target)
+        except Exception:
+            pass
+        self.after(500, self._lock_tick)
+
+    def on_lock_toggle(self, key):
+        var = self.lock_vars.get(key)
+        if var is None:
+            return
+        if var.get():
+            s = self.entries[key].get().strip()
+            target = None
+            if s:
+                try:
+                    target = int(s)
+                except ValueError:
+                    target = None
+            if target is None:
+                target = self.cur(key)
+            if target is None:
+                var.set(False)
+                self.set_status("锁定失败：读不到当前值", "red")
+                return
+            self.lock_targets[key] = target
+            self.set_status("已锁定 %s = %d（每 0.5 秒重写）" % (self._name_of(key), target), "green")
+        else:
+            self.lock_targets.pop(key, None)
+            self.set_status("已取消锁定 %s" % self._name_of(key), "black")
+
     def do_write(self, key):
         if not self.reg or not self.reg.base:
             self.set_status("未连接游戏 —— 先点「重新连接」", "red")
@@ -431,22 +512,10 @@ class Trainer(tk.Tk):
         try:
             v = int(s)
             v = max(0, min(v, 9999999))
-            if key == 'cap':
-                ok = self.reg.set(IDX_CAP_WALLET, v)
-                back = self.reg.v1(IDX_CAP_WALLET)
-                name = '钱包上限'
-            else:
-                idx = None
-                name = key
-                for k, nm, i2, capidx, okk in FIELDS:
-                    if k == key:
-                        name, idx = nm, i2
-                        break
-                ok = self.reg.set(idx, v)
-                if idx == IDX_SEEDS:
-                    for m in MIRROR_SEEDS:
-                        self.reg.set(m, v)
-                back = self.reg.v1(idx)
+            idx = self._idx_of(key)
+            name = self._name_of(key)
+            ok = self._set_value(key, v)
+            back = self.reg.v1(idx) if idx is not None else None
             if ok and back == v:
                 self.entries[key].delete(0, tk.END)
                 cap = self.capof(key) if key != 'cap' else None
@@ -469,6 +538,8 @@ class Trainer(tk.Tk):
         cap = self.capof(key)
         if key == 'cap':
             full_val = 999
+        elif key == 'magic':
+            full_val = 24
         elif cap and cap > 0:
             full_val = cap
         else:
@@ -483,6 +554,8 @@ class Trainer(tk.Tk):
             return
         done = []
         self.reg.set(IDX_CAP_WALLET, 999)
+        self.reg.set(IDX_MAGIC, 24)
+        done.append("魔力=24")
         self.reg.set(IDX_CAP_NUTS, 20)
         self.reg.set(IDX_CAP_SEEDS, 30)
         self.reg.set(IDX_CAP_STICKS, 10)
@@ -490,7 +563,7 @@ class Trainer(tk.Tk):
             cap = self.reg.v1(capidx) if capidx else 0
             if not cap or cap <= 0:
                 continue
-            if idx == IDX_ARROWS or idx == IDX_BOMBS:
+            if idx == IDX_ARROWS:
                 continue
             self.reg.set(idx, cap)
             if idx == IDX_SEEDS:
@@ -498,7 +571,7 @@ class Trainer(tk.Tk):
                     self.reg.set(m, cap)
             done.append("%s=%d" % (name, cap))
         if done:
-            self.set_status("已补满： " + "、".join(done) + "（箭矢/炸弹未验证，未动）", "green")
+            self.set_status("已补满： " + "、".join(done) + "（箭矢未验证，未动）", "green")
         else:
             self.set_status("没有可补满的项", "red")
         self._refresh_values()
@@ -517,13 +590,7 @@ class Trainer(tk.Tk):
                 v = int(s)
             except ValueError:
                 continue
-            if k == 'cap':
-                self.reg.set(IDX_CAP_WALLET, v)
-            else:
-                self.reg.set(idx, v)
-                if idx == IDX_SEEDS:
-                    for m in MIRROR_SEEDS:
-                        self.reg.set(m, v)
+            self._set_value(k, v)
             self.entries[k].delete(0, tk.END)
             n += 1
         self.set_status("已应用 %d 项" % n + ("（数字框里是空的就跳过）" if n == 0 else ""),
@@ -542,7 +609,7 @@ if __name__ == "__main__":
     except Exception:
         tb = traceback.format_exc()
         try:
-            messagebox.showerror("时之笛 Longshot 修改器 v1", "程序出错：\n\n" + tb[-1200:])
+            messagebox.showerror("时之笛 Longshot 修改器 v2", "程序出错：\n\n" + tb[-1200:])
         except Exception:
             pass
         raise
