@@ -17,9 +17,10 @@
   钱包上限 #976。种子写入时同步写镜像 #1213。
   炸弹 #1007 由差分验证：23:14 时 #1007=24，用户扔 1 颗炸弹后
   23:22 搜 23 仅剩 #1007=23（恰好减 1），确认为炸弹；原 #1018 与
-  #964 均非炸弹。魔力 #1234 由数值定位（搜 18）推断：用户称满 8 格
-  为 24 点、用掉 2 格剩 18 点，搜 18 得 6 条，#1234（+8=8）为最
-  可能的魔力候选；若实测不符，依次试 #1238、#124、#1065。
+  #964 均非炸弹，用户 23:29 实测炸弹已生效。魔力候选由数值定位
+  （搜 18）得出：用户称满 8 格为 24 点、用掉 2 格剩 18 点，搜 18
+  得 6 条；#1234 已实测无效，#1238 为主候选，#124、#1065、#15、
+  #1249 为其余候选，均已列入界面供实测，哪个生效就定哪个。
   魔力上限：本作满魔力 24 点（8 格，每格 3 点）；「满」默认写 24。
 """
 import ctypes
@@ -38,8 +39,13 @@ SCAN_LO = 0x10108A000000
 SCAN_HI = 0x10108AC00000
 NAME_HINTS = ('longshot', 'triforce', 'ocarina', 'zelda', 'oot', 'notrex', 'hook')
 IDX_RUPEE = 962
-IDX_MAGIC = 1234
+IDX_MAGIC = 1238
 IDX_BOMBS = 1007
+# 魔力候选（搜 18 的其余未验证项，供实测逐个试）
+IDX_MAGIC_C124 = 124
+IDX_MAGIC_C1065 = 1065
+IDX_MAGIC_C15 = 15
+IDX_MAGIC_C1249 = 1249
 IDX_NUTS = 1019
 IDX_SEEDS = 1020
 IDX_STICKS = 1021
@@ -52,7 +58,11 @@ MIRROR_SEEDS = [1213]
 
 FIELDS = [
     ('rupee',  '卢比',           IDX_RUPEE,  IDX_CAP_WALLET, True),
-    ('magic',  '魔力',           IDX_MAGIC,  None,           True),
+    ('magic',  '魔力 #1238',     IDX_MAGIC,  None,           True),
+    ('magic124', '魔力候选 #124', IDX_MAGIC_C124, None,       True),
+    ('magic1065', '魔力候选 #1065', IDX_MAGIC_C1065, None,     True),
+    ('magic15', '魔力候选 #15',  IDX_MAGIC_C15, None,         True),
+    ('magic1249', '魔力候选 #1249', IDX_MAGIC_C1249, None,     True),
     ('bombs',  '炸弹',           IDX_BOMBS,  None,           True),
     ('nuts',   '德库坚果',       IDX_NUTS,   IDX_CAP_NUTS,   True),
     ('seeds',  '德库种子(弹弓)', IDX_SEEDS,  IDX_CAP_SEEDS, True),
@@ -283,7 +293,7 @@ class Trainer(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("时之笛 Longshot 修改器 v2")
-        self.geometry("760x640")
+        self.geometry("760x800")
         self.attributes("-topmost", True)
         self.proc = None
         self.reg = None
@@ -538,7 +548,7 @@ class Trainer(tk.Tk):
         cap = self.capof(key)
         if key == 'cap':
             full_val = 999
-        elif key == 'magic':
+        elif key.startswith('magic'):
             full_val = 24
         elif cap and cap > 0:
             full_val = cap
