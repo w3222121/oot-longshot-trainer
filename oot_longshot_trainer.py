@@ -17,11 +17,12 @@
   钱包上限 #976。种子写入时同步写镜像 #1213。
   炸弹 #1007 由差分验证：23:14 时 #1007=24，用户扔 1 颗炸弹后
   23:22 搜 23 仅剩 #1007=23（恰好减 1），确认为炸弹；原 #1018 与
-  #964 均非炸弹，用户 23:29 实测炸弹已生效。魔力：存档修改器显示
-  当前魔力 6 点（满 24 点），搜 6 得 5 条；此前 #1234、#1238、
-  #124、#1065、#15、#1249 均已实测无效。#961（紧挨卢比 #962，
-  +8=8）为主候选，#836、#841、#65、#66 为其余候选，均已列入
-  界面供实测，哪个生效就定哪个。
+  #964 均非炸弹，用户 23:29 实测炸弹已生效。魔力：此前 #1234、
+  #1238、#124、#1065、#15、#1249、#961、#836、#841、#65、#66
+  均已实测无效。用户重新读档、魔力回满 24 点后搜 24 得 8 条，
+  除去炸弹 #1007 与已验证无效的 #15、#1238、#1249，剩余
+  #963（+8=8，紧挨卢比 #962）为主候选，#964、#16、#17 为其余
+  候选，均已列入界面供实测，哪个生效就定哪个。
   魔力上限：本作满魔力 24 点（8 格，每格 3 点）；「满」默认写 24。
 """
 import ctypes
@@ -40,13 +41,12 @@ SCAN_LO = 0x10108A000000
 SCAN_HI = 0x10108AC00000
 NAME_HINTS = ('longshot', 'triforce', 'ocarina', 'zelda', 'oot', 'notrex', 'hook')
 IDX_RUPEE = 962
-IDX_MAGIC = 961
+IDX_MAGIC = 963
 IDX_BOMBS = 1007
-# 魔力候选（搜 6 的其余未验证项，供实测逐个试）
-IDX_MAGIC_C836 = 836
-IDX_MAGIC_C841 = 841
-IDX_MAGIC_C65 = 65
-IDX_MAGIC_C66 = 66
+# 魔力候选（搜 24 的其余未验证项，供实测逐个试）
+IDX_MAGIC_C964 = 964
+IDX_MAGIC_C16 = 16
+IDX_MAGIC_C17 = 17
 IDX_NUTS = 1019
 IDX_SEEDS = 1020
 IDX_STICKS = 1021
@@ -59,11 +59,10 @@ MIRROR_SEEDS = [1213]
 
 FIELDS = [
     ('rupee',  '卢比',           IDX_RUPEE,  IDX_CAP_WALLET, True),
-    ('magic',  '魔力 #961',      IDX_MAGIC,  None,           True),
-    ('magic836', '魔力候选 #836', IDX_MAGIC_C836, None,       True),
-    ('magic841', '魔力候选 #841', IDX_MAGIC_C841, None,       True),
-    ('magic65', '魔力候选 #65',  IDX_MAGIC_C65, None,         True),
-    ('magic66', '魔力候选 #66',  IDX_MAGIC_C66, None,         True),
+    ('magic',  '魔力 #963',      IDX_MAGIC,  None,           True),
+    ('magic964', '魔力候选 #964', IDX_MAGIC_C964, None,       True),
+    ('magic16', '魔力候选 #16',  IDX_MAGIC_C16, None,         True),
+    ('magic17', '魔力候选 #17',  IDX_MAGIC_C17, None,         True),
     ('bombs',  '炸弹',           IDX_BOMBS,  None,           True),
     ('nuts',   '德库坚果',       IDX_NUTS,   IDX_CAP_NUTS,   True),
     ('seeds',  '德库种子(弹弓)', IDX_SEEDS,  IDX_CAP_SEEDS, True),
