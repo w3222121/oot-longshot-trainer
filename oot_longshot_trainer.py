@@ -24,6 +24,12 @@
   #963（+8=8，紧挨卢比 #962）为主候选，#964、#16、#17 为其余
   候选，均已列入界面供实测，哪个生效就定哪个。
   魔力上限：本作满魔力 24 点（8 格，每格 3 点）；「满」默认写 24。
+  魔力序号已由差分法定论：00:09 用户用差分定位器（oot_bomb_finder）
+  用一次魔法后，全表仅 #965 的 +28/+32 同步变化：240 -> 180，
+  恰为 6 点魔法 ×10 的刻度（满 24 点存为 240，用 6 点后 18 点存
+  为 180），故魔力为 #965，内存值 = 点数 ×10；其余变化
+  （#1095、#1213、#1214 仅 +28 单边变、数值恰为卢比/钱包上限）
+  为噪声。写魔力时须 ×10（写 24 点即写 240），读时 ÷10 显示。
 """
 import ctypes
 import struct
@@ -41,12 +47,9 @@ SCAN_LO = 0x10108A000000
 SCAN_HI = 0x10108AC00000
 NAME_HINTS = ('longshot', 'triforce', 'ocarina', 'zelda', 'oot', 'notrex', 'hook')
 IDX_RUPEE = 962
-IDX_MAGIC = 963
+IDX_MAGIC = 965
+MAGIC_SCALE = 10
 IDX_BOMBS = 1007
-# 魔力候选（搜 24 的其余未验证项，供实测逐个试）
-IDX_MAGIC_C964 = 964
-IDX_MAGIC_C16 = 16
-IDX_MAGIC_C17 = 17
 IDX_NUTS = 1019
 IDX_SEEDS = 1020
 IDX_STICKS = 1021
@@ -58,16 +61,14 @@ IDX_CAP_WALLET = 976
 MIRROR_SEEDS = [1213]
 
 FIELDS = [
-    ('rupee',  '卢比',           IDX_RUPEE,  IDX_CAP_WALLET, True),
-    ('magic',  '魔力 #963',      IDX_MAGIC,  None,           True),
-    ('magic964', '魔力候选 #964', IDX_MAGIC_C964, None,       True),
-    ('magic16', '魔力候选 #16',  IDX_MAGIC_C16, None,         True),
-    ('magic17', '魔力候选 #17',  IDX_MAGIC_C17, None,         True),
-    ('bombs',  '炸弹',           IDX_BOMBS,  None,           True),
-    ('nuts',   '德库坚果',       IDX_NUTS,   IDX_CAP_NUTS,   True),
-    ('seeds',  '德库种子(弹弓)', IDX_SEEDS,  IDX_CAP_SEEDS, True),
-    ('sticks', '德库木棒',       IDX_STICKS, IDX_CAP_STICKS, True),
-    ('arrows', '箭矢（未验证）', IDX_ARROWS, None,           False),
+    # (key, 显示名, 序号, 上限序号, 是否启用, 内存刻度：写值=点数×刻度，读值=内存÷刻度)
+    ('rupee',  '卢比',           IDX_RUPEE,  IDX_CAP_WALLET, True, 1),
+    ('magic',  '魔力',           IDX_MAGIC,  None,           True, MAGIC_SCALE),
+    ('bombs',  '炸弹',           IDX_BOMBS,  None,           True, 1),
+    ('nuts',   '德库坚果',       IDX_NUTS,   IDX_CAP_NUTS,   True, 1),
+    ('seeds',  '德库种子(弹弓)', IDX_SEEDS,  IDX_CAP_SEEDS, True, 1),
+    ('sticks', '德库木棒',       IDX_STICKS, IDX_CAP_STICKS, True, 1),
+    ('arrows', '箭矢（未验证）', IDX_ARROWS, None,           False, 1),
 ]
 
 PROCESS_QUERY_INFORMATION = 0x0400
@@ -292,7 +293,7 @@ def pick_game(name):
 class Trainer(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("时之笛 Longshot 修改器 v2")
+        self.title("时之笛 Longshot 修改器 v3")
         self.geometry("760x800")
         self.attributes("-topmost", True)
         self.proc = None
@@ -324,7 +325,7 @@ class Trainer(tk.Tk):
         for c, h in enumerate(headers):
             tk.Label(grid, text=h, font=("", 10, "bold")).grid(row=0, column=c, padx=4, pady=2)
         row = 1
-        for key, name, idx, capidx, ok in FIELDS:
+        for key, name, idx, capidx, ok, scale in FIELDS:
             tk.Label(grid, text=name).grid(row=row, column=0, sticky="w", padx=4, pady=4)
             cur = tk.Label(grid, text="—", width=10)
             cur.grid(row=row, column=1, padx=4, pady=4)
@@ -417,12 +418,19 @@ class Trainer(tk.Tk):
         self.set_status(msgs[0] if msgs else "没找到可用的游戏进程", "red")
         return False
 
+    def _scale_of(self, key):
+        for k, name, idx, capidx, ok, scale in FIELDS:
+            if k == key:
+                return scale
+        return 1
+
     def cur(self, key):
         if not self.reg or not self.reg.base:
             return None
-        for k, name, idx, capidx, ok in FIELDS:
+        for k, name, idx, capidx, ok, scale in FIELDS:
             if k == key:
-                return self.reg.v1(idx)
+                v = self.reg.v1(idx)
+                return v // scale if v is not None else None
         if key == 'cap':
             return self.reg.v1(IDX_CAP_WALLET)
         return None
@@ -430,7 +438,7 @@ class Trainer(tk.Tk):
     def capof(self, key):
         if not self.reg or not self.reg.base:
             return None
-        for k, name, idx, capidx, ok in FIELDS:
+        for k, name, idx, capidx, ok, scale in FIELDS:
             if k == key and capidx:
                 return self.reg.v1(capidx)
         return None
@@ -438,7 +446,7 @@ class Trainer(tk.Tk):
     def _idx_of(self, key):
         if key == 'cap':
             return IDX_CAP_WALLET
-        for k, name, idx, capidx, ok in FIELDS:
+        for k, name, idx, capidx, ok, scale in FIELDS:
             if k == key:
                 return idx
         return None
@@ -446,7 +454,7 @@ class Trainer(tk.Tk):
     def _name_of(self, key):
         if key == 'cap':
             return '钱包上限'
-        for k, name, idx, capidx, ok in FIELDS:
+        for k, name, idx, capidx, ok, scale in FIELDS:
             if k == key:
                 return name
         return key
@@ -455,10 +463,11 @@ class Trainer(tk.Tk):
         idx = self._idx_of(key)
         if idx is None:
             return False
-        ok = self.reg.set(idx, value)
+        raw = value * self._scale_of(key)
+        ok = self.reg.set(idx, raw)
         if idx == IDX_SEEDS:
             for m in MIRROR_SEEDS:
-                self.reg.set(m, value)
+                self.reg.set(m, raw)
         return ok
 
     def _refresh_values(self):
@@ -526,6 +535,7 @@ class Trainer(tk.Tk):
             name = self._name_of(key)
             ok = self._set_value(key, v)
             back = self.reg.v1(idx) if idx is not None else None
+            back = back // self._scale_of(key) if back is not None else None
             if ok and back == v:
                 self.entries[key].delete(0, tk.END)
                 cap = self.capof(key) if key != 'cap' else None
@@ -564,12 +574,12 @@ class Trainer(tk.Tk):
             return
         done = []
         self.reg.set(IDX_CAP_WALLET, 999)
-        self.reg.set(IDX_MAGIC, 24)
+        self._set_value('magic', 24)
         done.append("魔力=24")
         self.reg.set(IDX_CAP_NUTS, 20)
         self.reg.set(IDX_CAP_SEEDS, 30)
         self.reg.set(IDX_CAP_STICKS, 10)
-        for k, name, idx, capidx, ok in FIELDS:
+        for k, name, idx, capidx, ok, scale in FIELDS:
             cap = self.reg.v1(capidx) if capidx else 0
             if not cap or cap <= 0:
                 continue
@@ -591,8 +601,8 @@ class Trainer(tk.Tk):
             self.set_status("未连接游戏", "red")
             return
         n = 0
-        items = list(FIELDS) + [('cap', '钱包上限', IDX_CAP_WALLET, None, True)]
-        for k, name, idx, capidx, ok in items:
+        items = list(FIELDS) + [('cap', '钱包上限', IDX_CAP_WALLET, None, True, 1)]
+        for k, name, idx, capidx, ok, scale in items:
             s = self.entries[k].get().strip()
             if not s:
                 continue
