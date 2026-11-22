@@ -1,0 +1,27 @@
+name: Build finder EXE
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'oot_registry_finder.py'
+      - '.github/workflows/build-exe.yml'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install PyInstaller
+        run: pip install pyinstaller
+      - name: Build EXE
+        run: pyinstaller --onefile --name oot_registry_finder oot_registry_finder.py
+      - name: Upload EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: oot_registry_finder-windows
+          path: dist/oot_registry_finder.exe
