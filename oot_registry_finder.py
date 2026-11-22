@@ -262,4 +262,15 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        code = main()
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        code = 3
+    print()
+    try:
+        input("按回车键退出…")
+    except EOFError:
+        pass
+    sys.exit(code)
