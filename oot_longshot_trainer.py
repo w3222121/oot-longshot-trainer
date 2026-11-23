@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-时之笛 Longshot 修改器 v4（Triforce v3.1.1 / longshot.exe）
+时之笛 Longshot 修改器 v5（Triforce v3.1.1 / longshot.exe）
 ================================================================
 用法：先启动游戏（longshot.exe），进到存档、能自由行动，再双击本程序。
 程序启动后自动连接；点数字框敲数字，点「写入」即生效；改完请在游戏内
@@ -38,6 +38,13 @@
   程序自动收窄到同步变化的地址；之后写/锁魔力会同时写 #965 与全部
   镜像，才能真正无限魔法。镜像地址随每次启动变化，每次开游戏都要
   重新点一次定位；定位期间魔力锁定自动暂停。
+  v5 修复：重启游戏后锁定无效——原因是点定位时扫到 0 个候选（刚改过魔力
+  或刚读档，堆上镜像还没跟 #965 同步），程序却进了“定位中”状态，
+  _mirror_cands 为空列表（不是 None），导致魔力锁定被永久暂停，数值
+  掉回 18 也不重写。现改为 0 候选时不进定位状态，直接提示先用一次魔法
+  再重定位；定位中再点按钮会重新扫一遍。正确流程：进游戏先用一次魔法
+  让镜像同步，再点「定位魔力镜像」，再用一次魔法触发收窄，定位成功后
+  勾魔力锁定即可。
 """
 import ctypes
 import struct
@@ -260,6 +267,13 @@ class Registry:
                 off += ln
         self._mirror_cands = cands
         self._mirror_v1 = v1
+        if len(cands) == 0:
+            # 0 候选时不进“定位中”：否则 _mirror_cands 为空列表（不是 None），
+            # 魔力锁定会被永久暂停。常见原因是刚改过魔力或刚读档，堆上镜像
+            # 还没跟 #965 同步——先用一次魔法再重定位。
+            self._mirror_cands = None
+            self._mirror_v1 = None
+            return False, "没找到与当前魔力同步的地址（镜像还没同步）。请先在游戏里用一次魔法，再点一次定位", 0
         return True, "已记录 %d 个候选地址" % len(cands), len(cands)
 
     def poll_mirror_scan(self):
@@ -370,7 +384,7 @@ def pick_game(name):
 class Trainer(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("时之笛 Longshot 修改器 v4")
+        self.title("时之笛 Longshot 修改器 v5")
         self.geometry("760x840")
         self.attributes("-topmost", True)
         self.proc = None
@@ -456,11 +470,13 @@ class Trainer(tk.Tk):
             self.set_status("未连接游戏 —— 先点「重新连接」", "red")
             return
         if self.reg._mirror_cands is not None:
-            self.set_status("正在定位魔力镜像：请在游戏里用一次魔法（消耗 6 点），数值变化后自动收窄", "black")
-            return
+            # 定位中再点一次：重新扫一遍（上一次扫到的值可能已不同步）
+            self.reg._mirror_cands = None
+            self.reg._mirror_v1 = None
         ok, msg, n = self.reg.start_mirror_scan()
         if not ok:
             self.set_status("定位魔力镜像失败：" + msg, "red")
+            self.mirror_label.config(text="魔力镜像：未定位")
             return
         self.set_status("定位魔力镜像：%s，请在游戏里用一次魔法（消耗 6 点），数值变化后自动收窄（定位期间魔力锁定已暂停）" % msg, "black")
         self.mirror_label.config(text="魔力镜像：定位中（已记录 %d 个候选）" % n)
@@ -741,7 +757,7 @@ if __name__ == "__main__":
     except Exception:
         tb = traceback.format_exc()
         try:
-            messagebox.showerror("时之笛 Longshot 修改器 v4", "程序出错：\n\n" + tb[-1200:])
+            messagebox.showerror("时之笛 Longshot 修改器 v5", "程序出错：\n\n" + tb[-1200:])
         except Exception:
             pass
         raise
