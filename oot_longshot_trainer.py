@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-时之笛 Longshot 修改器 v6（Triforce v3.1.1 / longshot.exe）
+时之笛 Longshot 修改器 v7（Triforce v3.1.1 / longshot.exe）
 ================================================================
 用法：先启动游戏（longshot.exe），进到存档、能自由行动，再双击本程序。
 程序启动后自动连接；点数字框敲数字，点「写入」即生效；改完请在游戏内
@@ -51,6 +51,12 @@
   把 CE 里找到的镜像地址（如 101050056524）贴进输入框点「添加镜像」，
   绕过自动扫描；写/锁魔力时会同时写 #965 与全部已加镜像。每次重启
   游戏镜像地址会变，需重新填当次的地址。
+  v7 一次性锁定：地址每次启动都变，靠手动填不是长久之计。现改为连接
+  成功后自动开始定位镜像（不用再点按钮），且扫描范围从只扫私有内存
+  扩大到私有 + 映射的可写内存（镜像可能在映射区，之前只扫私有所以
+  0 候选）；魔力随时间自动回复、数值一变就自动收窄，收窄到 ≤32 个就
+  自动定为镜像。用户每启动一次游戏只需：打开修改器（自动连接定位），
+  等状态栏显示镜像已定位，再勾一次魔力锁定即可，不用再手动找地址。
 """
 import ctypes
 import struct
@@ -98,8 +104,14 @@ PROCESS_VM_READ = 0x0010
 PROCESS_VM_WRITE = 0x0020
 MEM_COMMIT = 0x1000
 MEM_PRIVATE = 0x20000
+MEM_MAPPED = 0x40000
 PAGE_GUARD = 0x100
 PAGE_NOACCESS = 0x01
+_WRITABLE_PROTECT = (0x04, 0x08, 0x40, 0x80)
+
+
+def _is_writable(protect):
+    return (protect & 0xFF) in _WRITABLE_PROTECT
 TH32CS_SNAPPROCESS = 0x00000002
 
 k32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -205,7 +217,9 @@ class Proc:
             size = mbi.RegionSize
             if base is None or size == 0:
                 break
-            if (mbi.State == MEM_COMMIT and mbi.Type == MEM_PRIVATE
+            if (mbi.State == MEM_COMMIT
+                    and mbi.Type in (MEM_PRIVATE, MEM_MAPPED)
+                    and _is_writable(mbi.Protect)
                     and not (mbi.Protect & PAGE_GUARD) and mbi.Protect != PAGE_NOACCESS):
                 s = max(base, lo)
                 e = min(base + size, hi)
@@ -390,7 +404,7 @@ def pick_game(name):
 class Trainer(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("时之笛 Longshot 修改器 v6")
+        self.title("时之笛 Longshot 修改器 v7")
         self.geometry("760x870")
         self.attributes("-topmost", True)
         self.proc = None
@@ -481,6 +495,21 @@ class Trainer(tk.Tk):
         tk.Label(mrow2, text="自动定位失败时，把 CE 里找到的镜像地址贴这里（16 进制，如 101050056524）",
                  fg="gray").pack(side="left", padx=8)
 
+    def _auto_locate_mirrors(self):
+        """连接成功后自动开始定位魔力镜像（不用再点按钮）。
+        魔力为 0 时不扫（扫 0 会海量命中），等绿条涨起来再由用户点按钮；
+        扫到 0 候选也不进定位状态，只提示。"""
+        if not self.reg or not self.reg.base:
+            return
+        if self.reg.magic_mirrors or self.reg._mirror_cands is not None:
+            return
+        ok, msg, n = self.reg.start_mirror_scan()
+        if not ok:
+            self.set_status("魔力镜像自动定位未开始：" + msg + "（可手动填 CE 找到的地址）", "black")
+            return
+        self.set_status("魔力镜像自动定位中：%s，魔力数值变化后自动收窄（定位期间魔力锁定暂停）" % msg, "black")
+        self.mirror_label.config(text="魔力镜像：定位中（已记录 %d 个候选）" % n)
+
     def on_locate_mirrors(self):
         if not self.reg or not self.reg.base:
             self.set_status("未连接游戏 —— 先点「重新连接」", "red")
@@ -563,6 +592,8 @@ class Trainer(tk.Tk):
                         exe_tmp, pid_tmp, (ws_tmp or 0) / 1073741824.0,
                         "已校验" if rg.note == "已校验" else "已重新定位"), "green")
                     self._refresh_values()
+                    # 连接成功后自动开始定位魔力镜像（不用再点按钮）
+                    self._auto_locate_mirrors()
                     return True
                 pr.close()
                 msgs.append("%s（PID %d）能打开，但里面没有这张变量表 → 游戏版本和这台不一样"
@@ -802,7 +833,7 @@ if __name__ == "__main__":
     except Exception:
         tb = traceback.format_exc()
         try:
-            messagebox.showerror("时之笛 Longshot 修改器 v6", "程序出错：\n\n" + tb[-1200:])
+            messagebox.showerror("时之笛 Longshot 修改器 v7", "程序出错：\n\n" + tb[-1200:])
         except Exception:
             pass
         raise
