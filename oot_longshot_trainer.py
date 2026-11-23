@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-时之笛 Longshot 修改器 v2（Triforce v3.1.1 / longshot.exe）
+时之笛 Longshot 修改器 v4（Triforce v3.1.1 / longshot.exe）
 ================================================================
 用法：先启动游戏（longshot.exe），进到存档、能自由行动，再双击本程序。
 程序启动后自动连接；点数字框敲数字，点「写入」即生效；改完请在游戏内
@@ -12,17 +12,17 @@
 机制（与 Hookshot 版 v5 相同，Triforce v3.1.1 实机验证通过）：
   变量登记表基址 0x10108AA6CAC8（Triforce 上与 v5 相同，已验证），步长 40 字节，
   魔数 0x84C40718；数值 int32 在表项 +28，写入时同时写 +28 与 +32。
-  卢比 #962 / 魔力 #963 / 炸弹 #1007 / 坚果 #1019 / 种子 #1020（镜像 #1213）/
-  木棒 #1021 / 箭矢 #1017；容量：坚果袋 #973 / 种子袋 #974 / 木棒袋 #975 /
-  钱包上限 #976。种子写入时同步写镜像 #1213。
+  卢比 #962 / 魔力 #965（内存值 = 点数 ×10）/ 炸弹 #1007 / 坚果 #1019 /
+  种子 #1020（镜像 #1213）/ 木棒 #1021 / 箭矢 #1017；容量：坚果袋 #973 /
+  种子袋 #974 / 木棒袋 #975 / 钱包上限 #976。种子写入时同步写镜像 #1213。
+  注意：游戏每次启动基址会变（ASLR），表内地址只对当次有效；修改器
+  每次连接先试固定基址，失败则全内存扫魔数重定位，不用手动改地址。
   炸弹 #1007 由差分验证：23:14 时 #1007=24，用户扔 1 颗炸弹后
   23:22 搜 23 仅剩 #1007=23（恰好减 1），确认为炸弹；原 #1018 与
-  #964 均非炸弹，用户 23:29 实测炸弹已生效。魔力：此前 #1234、
-  #1238、#124、#1065、#15、#1249、#961、#836、#841、#65、#66
-  均已实测无效。用户重新读档、魔力回满 24 点后搜 24 得 8 条，
-  除去炸弹 #1007 与已验证无效的 #15、#1238、#1249，剩余
-  #963（+8=8，紧挨卢比 #962）为主候选，#964、#16、#17 为其余
-  候选，均已列入界面供实测，哪个生效就定哪个。
+  #964 均非炸弹，用户 23:29 实测炸弹已生效。魔力此前按 int32 搜的
+  15 个候选（#1234、#1238、#124、#1065、#15、#1249、#961、#836、
+  #841、#65、#66、#963、#964、#16、#17）均已实测无效，按值搜无一
+  候选能横跨 18→12→6 全程跟随，浮点搜 24.0 亦为 0 条。
   魔力上限：本作满魔力 24 点（8 格，每格 3 点）；「满」默认写 24。
   魔力序号已由差分法定论：00:09 用户用差分定位器（oot_bomb_finder）
   用一次魔法后，全表仅 #965 的 +28/+32 同步变化：240 -> 180，
@@ -30,6 +30,14 @@
   为 180），故魔力为 #965，内存值 = 点数 ×10；其余变化
   （#1095、#1213、#1214 仅 +28 单边变、数值恰为卢比/钱包上限）
   为噪声。写魔力时须 ×10（写 24 点即写 240），读时 ÷10 显示。
+  魔力镜像（v4 新增）：只锁 #965 放不出魔法——游戏真正查的魔力在
+  堆上另有几处同步的拷贝（用户 CE 实测：101050023C14 等 4 处与 #965
+  同步 180→120，#965 只是其中一份；0x1133AD0 那条是误判，值
+  17829408 不是魔力）。指针扫描 7 层 0 结果，无静态指针链，故用
+  差分定位：点「定位魔力镜像」先扫当前值，再用一次魔法让数值变化，
+  程序自动收窄到同步变化的地址；之后写/锁魔力会同时写 #965 与全部
+  镜像，才能真正无限魔法。镜像地址随每次启动变化，每次开游戏都要
+  重新点一次定位；定位期间魔力锁定自动暂停。
 """
 import ctypes
 import struct
@@ -200,6 +208,9 @@ class Registry:
         self.p = proc
         self.base = None
         self.note = ""
+        self.magic_mirrors = []
+        self._mirror_cands = None
+        self._mirror_v1 = None
 
     def entry(self, idx):
         return self.base + idx * STRIDE
@@ -212,6 +223,60 @@ class Registry:
         ok1 = self.p.write_int(h + 28, value)
         ok2 = self.p.write_int(h + 32, value)
         return ok1 and ok2
+
+    def magic_raw(self):
+        return self.p.read_int(self.entry(IDX_MAGIC) + 28)
+
+    def start_mirror_scan(self):
+        """第一次扫描：记下 #965 当前原始值，全内存找同样值的地址（排除变量表本身）。
+        返回 (ok, msg, count)。用户随后在游戏里用一次魔法，数值变化后由
+        poll_mirror_scan 收窄。"""
+        v1 = self.magic_raw()
+        if v1 is None:
+            return False, "读不到魔力值", 0
+        if v1 == 0:
+            return False, "魔力当前为 0，扫 0 会有海量命中；请等绿条涨起来（>0）再点定位", 0
+        reg_lo = self.base
+        reg_hi = self.base + 1259 * STRIDE
+        pat = struct.pack('<i', v1)
+        cands = []
+        for base, size in self.p.regions(0, 1 << 47):
+            off = 0
+            while off < size:
+                ln = min(2097152, size - off)
+                raw = self.p.read(base + off, ln)
+                if raw:
+                    start = 0
+                    while True:
+                        k = raw.find(pat, start)
+                        if k < 0:
+                            break
+                        a = base + off + k
+                        if not (reg_lo <= a < reg_hi):
+                            cands.append(a)
+                            if len(cands) > 200000:
+                                return False, "候选太多（>200000），请换个魔力值再试", 0
+                        start = k + 1
+                off += ln
+        self._mirror_cands = cands
+        self._mirror_v1 = v1
+        return True, "已记录 %d 个候选地址" % len(cands), len(cands)
+
+    def poll_mirror_scan(self):
+        """在魔力数值变化时收窄候选。返回 (done, msg)。"""
+        if self._mirror_cands is None:
+            return False, ""
+        v2 = self.magic_raw()
+        if v2 is None or v2 == self._mirror_v1:
+            return False, ""
+        keep = [a for a in self._mirror_cands if self.p.read_int(a) == v2]
+        self._mirror_cands = keep
+        self._mirror_v1 = v2
+        if len(keep) <= 32:
+            self.magic_mirrors = keep
+            self._mirror_cands = None
+            return True, "已定位魔力镜像：%d 个地址，写/锁魔力时会同步写它们" % len(keep)
+        return False, "候选已缩小到 %d 个，再用一次魔法继续收窄" % len(keep)
 
     def verify(self, base):
         try:
@@ -235,19 +300,31 @@ class Registry:
         if self.verify(REF_BASE):
             self.base, self.note = REF_BASE, "已校验"
             return True
+        # 固定范围快扫（基址未变时最快）
         for base, size in self.p.regions(SCAN_LO, SCAN_HI):
-            off = 0
-            while off < size:
-                ln = min(2097152, size - off)
-                raw = self.p.read(base + off, ln)
-                if raw:
-                    for k in range(0, max(0, len(raw) - 4), 4):
-                        if struct.unpack_from('<I', raw, k)[0] == MAGIC:
-                            a = base + off + k
-                            if self.verify(a):
-                                self.base, self.note = a, "已重新定位"
-                                return True
-                off += 2097152
+            if self._scan_region(base, size):
+                return True
+        # 基址随每次启动变化（ASLR）：全进程扫私有已提交内存找魔数
+        for base, size in self.p.regions(0, 1 << 47):
+            if self._scan_region(base, size):
+                self.note = "已重新定位（全内存扫描）"
+                return True
+        return False
+
+    def _scan_region(self, base, size):
+        off = 0
+        while off < size:
+            ln = min(2097152, size - off)
+            raw = self.p.read(base + off, ln)
+            if raw:
+                for k in range(0, max(0, len(raw) - 4), 4):
+                    if struct.unpack_from('<I', raw, k)[0] == MAGIC:
+                        a = base + off + k
+                        if self.verify(a):
+                            self.base = a
+                            self.note = "已重新定位"
+                            return True
+            off += 2097152
         return False
 
 
@@ -293,8 +370,8 @@ def pick_game(name):
 class Trainer(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("时之笛 Longshot 修改器 v3")
-        self.geometry("760x800")
+        self.title("时之笛 Longshot 修改器 v4")
+        self.geometry("760x840")
         self.attributes("-topmost", True)
         self.proc = None
         self.reg = None
@@ -365,6 +442,28 @@ class Trainer(tk.Tk):
         tk.Button(bottom, text="一键补满", width=12, command=self.max_all).pack(side="left", padx=4)
         tk.Label(bottom, text="只改内存，不写存档；改完请在游戏内存一次档。\n勾「锁定」后每 0.5 秒把该项重写回锁定值。",
                  fg="gray").pack(side="left", padx=8)
+
+        mrow = tk.Frame(self)
+        mrow.pack(fill="x", padx=10, pady=4)
+        tk.Button(mrow, text="定位魔力镜像", width=14,
+                  command=self.on_locate_mirrors).pack(side="left", padx=4)
+        self.mirror_label = tk.Label(mrow, text="魔力镜像：未定位（只锁 #965 放不出魔法）",
+                                     anchor="w", fg="gray")
+        self.mirror_label.pack(side="left", padx=8)
+
+    def on_locate_mirrors(self):
+        if not self.reg or not self.reg.base:
+            self.set_status("未连接游戏 —— 先点「重新连接」", "red")
+            return
+        if self.reg._mirror_cands is not None:
+            self.set_status("正在定位魔力镜像：请在游戏里用一次魔法（消耗 6 点），数值变化后自动收窄", "black")
+            return
+        ok, msg, n = self.reg.start_mirror_scan()
+        if not ok:
+            self.set_status("定位魔力镜像失败：" + msg, "red")
+            return
+        self.set_status("定位魔力镜像：%s，请在游戏里用一次魔法（消耗 6 点），数值变化后自动收窄（定位期间魔力锁定已暂停）" % msg, "black")
+        self.mirror_label.config(text="魔力镜像：定位中（已记录 %d 个候选）" % n)
 
     def set_status(self, msg, color="black"):
         self.status.config(text=msg, fg=color)
@@ -468,6 +567,9 @@ class Trainer(tk.Tk):
         if idx == IDX_SEEDS:
             for m in MIRROR_SEEDS:
                 self.reg.set(m, raw)
+        if idx == IDX_MAGIC:
+            for a in self.reg.magic_mirrors:
+                self.reg.p.write_int(a, raw)
         return ok
 
     def _refresh_values(self):
@@ -480,6 +582,13 @@ class Trainer(tk.Tk):
     def _refresh_tick(self):
         try:
             self._refresh_values()
+            if self.reg and self.reg._mirror_cands is not None:
+                done, msg = self.reg.poll_mirror_scan()
+                if msg:
+                    self.set_status(msg, "green" if done else "black")
+                    if done:
+                        self.mirror_label.config(
+                            text="魔力镜像：%d 个地址已定位" % len(self.reg.magic_mirrors))
         except Exception:
             pass
         self.after(1000, self._refresh_tick)
@@ -489,6 +598,9 @@ class Trainer(tk.Tk):
             if self.reg and self.reg.base:
                 for key, var in self.lock_vars.items():
                     if var.get():
+                        # 定位魔力镜像期间暂停锁魔力，否则 #965 不变、无法收窄候选
+                        if key == 'magic' and self.reg._mirror_cands is not None:
+                            continue
                         target = self.lock_targets.get(key)
                         if target is not None:
                             self._set_value(key, target)
@@ -629,7 +741,7 @@ if __name__ == "__main__":
     except Exception:
         tb = traceback.format_exc()
         try:
-            messagebox.showerror("时之笛 Longshot 修改器 v2", "程序出错：\n\n" + tb[-1200:])
+            messagebox.showerror("时之笛 Longshot 修改器 v4", "程序出错：\n\n" + tb[-1200:])
         except Exception:
             pass
         raise
