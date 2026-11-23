@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-时之笛 Longshot 修改器 v5（Triforce v3.1.1 / longshot.exe）
+时之笛 Longshot 修改器 v6（Triforce v3.1.1 / longshot.exe）
 ================================================================
 用法：先启动游戏（longshot.exe），进到存档、能自由行动，再双击本程序。
 程序启动后自动连接；点数字框敲数字，点「写入」即生效；改完请在游戏内
@@ -45,6 +45,12 @@
   再重定位；定位中再点按钮会重新扫一遍。正确流程：进游戏先用一次魔法
   让镜像同步，再点「定位魔力镜像」，再用一次魔法触发收窄，定位成功后
   勾魔力锁定即可。
+  v6 新增手动填镜像地址：自动定位在新会话里仍可能 0 候选（用户 15:57
+  用了两次魔法仍失败，魔力 24→18→12，定位仍报“没找到同步地址”），
+  原因未明（可能镜像不在私有内存区、或与 #965 不同步）。现允许直接
+  把 CE 里找到的镜像地址（如 101050056524）贴进输入框点「添加镜像」，
+  绕过自动扫描；写/锁魔力时会同时写 #965 与全部已加镜像。每次重启
+  游戏镜像地址会变，需重新填当次的地址。
 """
 import ctypes
 import struct
@@ -384,8 +390,8 @@ def pick_game(name):
 class Trainer(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("时之笛 Longshot 修改器 v5")
-        self.geometry("760x840")
+        self.title("时之笛 Longshot 修改器 v6")
+        self.geometry("760x870")
         self.attributes("-topmost", True)
         self.proc = None
         self.reg = None
@@ -465,6 +471,16 @@ class Trainer(tk.Tk):
                                      anchor="w", fg="gray")
         self.mirror_label.pack(side="left", padx=8)
 
+        mrow2 = tk.Frame(self)
+        mrow2.pack(fill="x", padx=10, pady=4)
+        tk.Label(mrow2, text="手动填镜像地址：").pack(side="left", padx=4)
+        self.mirror_entry = tk.Entry(mrow2, width=20)
+        self.mirror_entry.pack(side="left", padx=4)
+        tk.Button(mrow2, text="添加镜像", width=10,
+                  command=self.on_add_mirror_manual).pack(side="left", padx=4)
+        tk.Label(mrow2, text="自动定位失败时，把 CE 里找到的镜像地址贴这里（16 进制，如 101050056524）",
+                 fg="gray").pack(side="left", padx=8)
+
     def on_locate_mirrors(self):
         if not self.reg or not self.reg.base:
             self.set_status("未连接游戏 —— 先点「重新连接」", "red")
@@ -480,6 +496,35 @@ class Trainer(tk.Tk):
             return
         self.set_status("定位魔力镜像：%s，请在游戏里用一次魔法（消耗 6 点），数值变化后自动收窄（定位期间魔力锁定已暂停）" % msg, "black")
         self.mirror_label.config(text="魔力镜像：定位中（已记录 %d 个候选）" % n)
+
+    def on_add_mirror_manual(self):
+        if not self.reg or not self.reg.base:
+            self.set_status("未连接游戏 —— 先点「重新连接」", "red")
+            return
+        s = self.mirror_entry.get().strip().lower()
+        if not s:
+            self.set_status("请先在输入框里贴镜像地址（16 进制，如 101050056524）", "red")
+            return
+        if s.startswith("0x"):
+            s = s[2:]
+        try:
+            addr = int(s, 16)
+        except ValueError:
+            self.set_status("地址格式不对：请输入 16 进制地址，如 101050056524", "red")
+            return
+        if addr <= 0x10000 or addr >= (1 << 47):
+            self.set_status("地址超出合理范围：%s" % hex(addr), "red")
+            return
+        if addr in self.reg.magic_mirrors:
+            self.set_status("该镜像地址已在列表里：%s" % hex(addr), "black")
+            return
+        cur = self.reg.p.read_int(addr)
+        self.reg.magic_mirrors.append(addr)
+        self.mirror_entry.delete(0, tk.END)
+        self.mirror_label.config(
+            text="魔力镜像：%d 个地址已定位" % len(self.reg.magic_mirrors))
+        self.set_status("已添加魔力镜像 %s（当前值 %s），写/锁魔力时会同步写它" % (
+            hex(addr), cur if cur is not None else "读不到"), "green")
 
     def set_status(self, msg, color="black"):
         self.status.config(text=msg, fg=color)
@@ -757,7 +802,7 @@ if __name__ == "__main__":
     except Exception:
         tb = traceback.format_exc()
         try:
-            messagebox.showerror("时之笛 Longshot 修改器 v5", "程序出错：\n\n" + tb[-1200:])
+            messagebox.showerror("时之笛 Longshot 修改器 v6", "程序出错：\n\n" + tb[-1200:])
         except Exception:
             pass
         raise
